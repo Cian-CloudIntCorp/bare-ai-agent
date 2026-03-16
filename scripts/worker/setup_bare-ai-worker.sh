@@ -125,13 +125,22 @@ execute_command "chmod +x \"$DEST_BIN\"" "Make bare-summarize executable"
 if [ "$ENGINE_CHOICE" == "1" ]; then
     echo -e "${GREEN}Configuring Sovereign Bare-AI Engine...${NC}"
 
-    # Ensure npm is available before attempting build
+    # Ensure npm is available and up to date before attempting build
+    # npm 9.x has a known bug with npm: alias in overrides - requires npm 10+
     if ! command -v npm &>/dev/null; then
         echo -e "${YELLOW}npm not found. Installing Node.js and npm...${NC}"
         execute_command "sudo apt-get update -qq && sudo apt-get install -y -qq nodejs npm" "Install Node.js and npm"
-        echo -e "${GREEN}✓ Node.js and npm installed${NC}"
+    fi
+
+    NPM_MAJOR=$(npm --version 2>/dev/null | cut -d. -f1)
+    if [ "${NPM_MAJOR:-0}" -lt 10 ]; then
+        echo -e "${YELLOW}npm version too old ($(npm --version)). Upgrading via n...${NC}"
+        execute_command "sudo npm install -g n" "Install n (node version manager)"
+        execute_command "sudo n stable" "Upgrade Node.js to stable"
+        hash -r 2>/dev/null || true
+        echo -e "${GREEN}✓ Node.js and npm upgraded (npm $(npm --version))${NC}"
     else
-        echo -e "${GREEN}✓ npm already installed${NC}"
+        echo -e "${GREEN}✓ npm $(npm --version) - OK${NC}"
     fi
 
     if [ ! -d "$CLI_REPO_DIR" ]; then
