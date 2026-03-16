@@ -44,10 +44,19 @@ execute_command "mkdir -p \"$BARE_AI_DIR/diary\" \"$LOG_DIR\" \"$BIN_DIR\"" "Cre
 # 2. Engine Installation Logic
 if [ "$ENGINE_CHOICE" == "1" ]; then
     echo -e "${GREEN}Configuring Sovereign Bare-AI Engine...${NC}"
+    
+    # NEW: Automatic GitHub Retrieval
     if [ ! -d "$CLI_REPO_DIR" ]; then
-        echo -e "${RED}Error: Local repo not found at $CLI_REPO_DIR. Please clone it first.${NC}"
-        exit 1
+        echo -e "${YELLOW}CLI not found. Pulling sovereign engine from GitHub...${NC}"
+        git clone https://github.com/Cian-CloudIntCorp/bare-ai-cli.git "$CLI_REPO_DIR"
+    else
+        echo -e "${GREEN}Existing CLI found. Pulling latest updates...${NC}"
+        cd "$CLI_REPO_DIR" && git pull origin main
     fi
+
+    # Ensure dependencies and build are fresh
+    execute_command "cd $CLI_REPO_DIR && npm install && npm run build && npm run bundle" "Build Sovereign Engine"
+    
     ENGINE_CMD="cd $CLI_REPO_DIR && node sovereign.js"
 else
     echo -e "${YELLOW}Installing Google Gemini-CLI via npm...${NC}"
