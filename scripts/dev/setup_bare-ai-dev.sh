@@ -31,7 +31,17 @@ NC="\033[0m"
 
 BARE_AI_DIR="$HOME/.bare-ai"
 BIN_DIR="$BARE_AI_DIR/bin"
-REPO_DIR="$HOME/Bare-ai"
+
+# Derive repo root dynamically from script location (works regardless of clone name/path)
+# Script lives at <repo_root>/scripts/dev/setup_bare-ai-dev.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+echo -e "${GREEN}Repo root detected: $REPO_DIR${NC}"
+
+# Store repo path so bare-enroll can find it at runtime
+mkdir -p "$HOME/.bare-ai"
+echo "BARE_AI_REPO=$REPO_DIR" > "$HOME/.bare-ai/agent.env"
+TEMPLATES_DIR="$REPO_DIR/scripts/templates"
 
 echo -e "${GREEN}Initializing BARE-AI ARCHITECT CONSOLE (v5.1.0)...${NC}"
 
@@ -48,7 +58,7 @@ if [ -f "$WORKER_ARTIFACT" ]; then
     echo -e "${GREEN}✓ bare-audit installed${NC}"
 else
     echo -e "${YELLOW}⚠️  Warning: Worker artifact not found at $WORKER_ARTIFACT${NC}"
-    echo "   Expected: ~/Bare-ai/scripts/worker/bare-summarize"
+    echo "   Expected: <repo_root>/scripts/worker/bare-summarize"
 fi
 
 # 3. Create 'bare-enroll' (The Deployment Tool)
@@ -63,7 +73,16 @@ if [ -z "$TARGET" ]; then
 fi
 
 echo "🚀 Enrolling Node: $TARGET"
-REPO_PATH="$HOME/Bare-ai"
+
+# Load repo path written at install time by setup_bare-ai-dev.sh
+if [ -f "$HOME/.bare-ai/agent.env" ]; then
+    source "$HOME/.bare-ai/agent.env"
+    REPO_PATH="$BARE_AI_REPO"
+else
+    echo "❌ Error: agent.env not found at ~/.bare-ai/agent.env"
+    echo "   Re-run setup_bare-ai-dev.sh to regenerate it."
+    exit 1
+fi
 
 # Correct paths: both files live under scripts/worker/
 WORKER_SCRIPT="$REPO_PATH/scripts/worker/setup_bare-ai-worker.sh"
@@ -97,24 +116,36 @@ EnrollEOF
 chmod +x "$BIN_DIR/bare-enroll"
 echo -e "${GREEN}✓ bare-enroll installed${NC}"
 
-# 4. Enforce Architect Constitution
-CONSTITUTION="# MISSION
-You are the **Bare-AI Architect Assistant**.
-You run on the Developer Console (Penguin).
-Your goal is to help write code, manage Git, and debug the fleet.
+# 4. Deploy Constitutions
+echo -e "${YELLOW}Deploying technical constitution...${NC}"
+TECH_CONST_SRC="$TEMPLATES_DIR/technical-constitution.md"
+TECH_CONST_DEST="$BARE_AI_DIR/technical-constitution.md"
 
-# RULES
-1. **Context:** You are on a Dev Machine, NOT a server.
-2. **Safety:** Do not restart system services (systemd) on this machine.
-3. **Capabilities:** You can use 'git', 'ssh', and 'bare-enroll'.
-4. **Style:** Be concise, technical, and accurate.
+if [ -f "$TECH_CONST_SRC" ]; then
+    cp "$TECH_CONST_SRC" "$TECH_CONST_DEST"
+    chmod 444 "$TECH_CONST_DEST"
+    echo -e "${GREEN}✓ Technical constitution deployed (read-only)${NC}"
+else
+    echo -e "${RED}❌ Error: technical-constitution.md not found at $TECH_CONST_SRC${NC}"
+    exit 1
+fi
 
-# DIARY
-Logs are stored in ~/.bare-ai/diary/."
+echo -e "${YELLOW}Checking role constitution...${NC}"
+ROLE_CONST="$BARE_AI_DIR/role.md"
+ROLE_STARTER="$TEMPLATES_DIR/role-starter.md"
 
-echo -e "${YELLOW}Updating Identity to Architect Mode...${NC}"
-echo "$CONSTITUTION" > "$BARE_AI_DIR/constitution.md"
-echo -e "${GREEN}✓ Constitution updated${NC}"
+if [ ! -f "$ROLE_CONST" ]; then
+    if [ -f "$ROLE_STARTER" ]; then
+        cp "$ROLE_STARTER" "$ROLE_CONST"
+        echo -e "${GREEN}✓ Starter role constitution created at ~/.bare-ai/role.md${NC}"
+        echo -e "${YELLOW}  → Please edit ~/.bare-ai/role.md to define this node's personality and mission.${NC}"
+    else
+        echo "# BARE-AI ROLE CONSTITUTION
+# Edit this file to define this agent's role and personality." > "$ROLE_CONST"
+    fi
+else
+    echo -e "${GREEN}✓ Role constitution already exists — not overwritten${NC}"
+fi
 
 # 5. .bashrc Updates (Log Forwarding & Hybrid Engine Detection)
 cat << 'BashrcEOF' > "$BARE_AI_DIR/dev_aliases"
@@ -146,7 +177,8 @@ _bare_detect_engine() {
 # The Local Assistant (Hybrid Engine + Log Forwarding)
 bare() {
     local TODAY=$(date +%Y-%m-%d)
-    local CONST="$HOME/.bare-ai/constitution.md"
+    local TECH_CONST="$HOME/.bare-ai/technical-constitution.md"
+    local ROLE_CONST="$HOME/.bare-ai/role.md"
     local DIARY="$HOME/.bare-ai/diary/$TODAY.md"
     local ENGINE
     ENGINE=$(_bare_detect_engine)
@@ -157,7 +189,9 @@ bare() {
     case "$ENGINE" in
         bare)
             echo -e "${GREEN}🤖 [Engine: Bare-AI CLI]${NC}"
-            bare-ai -i "$(cat "$CONST")"
+            export BARE_AI_CONSTITUTION="$TECH_CONST"
+            export BARE_AI_ROLE_CONSTITUTION="$ROLE_CONST"
+            bare-ai
             if [ -f "BARE.md" ]; then
                 echo -e "\n--- SESSION APPENDED: $(date) [bare-ai] ---" >> "$DIARY"
                 cat "BARE.md" >> "$DIARY"
@@ -167,7 +201,14 @@ bare() {
             ;;
         gemini)
             echo -e "${YELLOW}✨ [Engine: Gemini CLI]${NC}"
-            gemini -m gemini-2.5-flash-lite -i "$(cat "$CONST")"
+            export BARE_AI_CONSTITUTION="$TECH_CONST"
+            export BARE_AI_ROLE_CONSTITUTION="$ROLE_CONST"
+            local combined_const
+            combined_const=$(cat "$TECH_CONST")
+            if [ -f "$ROLE_CONST" ]; then
+                combined_const="${combined_const}"$'\n\n---\n\n'"$(cat "$ROLE_CONST")"
+            fi
+            gemini -m gemini-2.5-flash-lite -i "$combined_const"
             if [ -f "GEMINI.md" ]; then
                 echo -e "\n--- SESSION APPENDED: $(date) [gemini] ---" >> "$DIARY"
                 cat "GEMINI.md" >> "$DIARY"
@@ -188,7 +229,7 @@ alias bare-gemini='BARE_ENGINE=gemini bare'
 alias bare-sovereign='BARE_ENGINE=bare bare'
 
 alias bare-status='echo "🔍 Local Telemetry Audit:"; bare-audit | jq .'
-alias bare-cd='cd ~/Bare-ai'
+alias bare-cd='source ~/.bare-ai/agent.env 2>/dev/null && cd "$BARE_AI_REPO" || echo "agent.env not found"'
 alias bare-engine='_bare_detect_engine && echo "Current engine: $(_bare_detect_engine) (override with: export BARE_ENGINE=bare|gemini)"'
 BashrcEOF
 

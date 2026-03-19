@@ -53,6 +53,9 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
 else
     SOURCE_DIR="$(pwd)"
 fi
+# Repo root is two levels up from scripts/worker/
+REPO_DIR="$(cd "$SOURCE_DIR/../.." && pwd)"
+TEMPLATES_DIR="$REPO_DIR/scripts/templates"
 
 # --- HELPER: execute_command ---
 # Runs a command autonomously, logs result as JSON, honours set -e
@@ -188,31 +191,41 @@ else
     echo -e "${YELLOW}⚠️  Config already exists, skipping ID generation${NC}"
 fi
 
-# --- 5. CONSTITUTION ---
-# Written with single-quotes around heredoc delimiter so variables are NOT expanded at write time.
-# The bare() function sources this at runtime where $HOME etc. resolve correctly.
-echo -e "${YELLOW}Writing constitution.md...${NC}"
-cat << 'CONST_EOF' > "$BARE_AI_DIR/constitution.md"
-# MISSION
-You are Bare-AI, an autonomous Linux Agent responsible for "Self-Healing" data pipelines.
-Your goal is to fix data errors, convert formats, and verify integrity using standard Linux tools.
+# --- 5. CONSTITUTIONS ---
+# technical-constitution.md — base Linux rules, managed by bare-ai-agent, read-only
+# role.md                   — node personality, user-owned, never overwritten
 
-# OPERATIONAL RULES
-1. **Tool First, Think Second:** Do not guess file contents. Use 'head', 'file', or 'grep' to inspect them first.
-2. **Verification:** Never assume a conversion worked. Always run a check command (e.g., 'jq .' to verify JSON validity).
-3. **Resource Efficiency:** Do not read files larger than 1MB into your context. Use 'split', 'awk', or 'sed'.
-4. **Self-Correction:** If a command fails, read the error code, formulate a fix, and retry once.
-5. **Updates:** Use 'sudo DEBIAN_FRONTEND=noninteractive' for updates.
-6. **Sovereignty:** If using Bare-AI-CLI, prioritize SearXNG for web search if BARE_AI_SEARCH_URL is set.
+echo -e "${YELLOW}Deploying technical constitution...${NC}"
+TECH_CONST_SRC="$TEMPLATES_DIR/technical-constitution.md"
+TECH_CONST_DEST="$BARE_AI_DIR/technical-constitution.md"
 
-# FORBIDDEN ACTIONS
-- Do not use 'rm' on files outside the '/tmp' directory.
-- Do not hallucinate library availability. Use 'dpkg -l' or 'pip list' to check before importing.
+if [ -f "$TECH_CONST_SRC" ]; then
+    # Always overwrite technical constitution — it is managed by the repo
+    cp "$TECH_CONST_SRC" "$TECH_CONST_DEST"
+    chmod 444 "$TECH_CONST_DEST"
+    echo -e "${GREEN}✓ Technical constitution deployed (read-only)${NC}"
+else
+    echo -e "${RED}❌ Error: technical-constitution.md not found at $TECH_CONST_SRC${NC}"
+    exit 1
+fi
 
-# DIARY RULES
-1. Log all learnings and a succinct summary of actions to ~/.bare-ai/diary/{{DATE}}.md.
-CONST_EOF
-echo -e "${GREEN}✓ Constitution written${NC}"
+echo -e "${YELLOW}Checking role constitution...${NC}"
+ROLE_CONST="$BARE_AI_DIR/role.md"
+ROLE_STARTER="$TEMPLATES_DIR/role-starter.md"
+
+if [ ! -f "$ROLE_CONST" ]; then
+    if [ -f "$ROLE_STARTER" ]; then
+        cp "$ROLE_STARTER" "$ROLE_CONST"
+        echo -e "${GREEN}✓ Starter role constitution created at ~/.bare-ai/role.md${NC}"
+        echo -e "${YELLOW}  → Please edit ~/.bare-ai/role.md to define this node's personality and mission.${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Role starter template not found — creating blank role.md${NC}"
+        echo "# BARE-AI ROLE CONSTITUTION
+# Edit this file to define this agent's role and personality." > "$ROLE_CONST"
+    fi
+else
+    echo -e "${GREEN}✓ Role constitution already exists — not overwritten${NC}"
+fi
 
 # --- 6. README ---
 echo -e "${YELLOW}Writing README.md...${NC}"
@@ -222,11 +235,16 @@ cat << 'README_EOF' > "$BARE_AI_DIR/README.md"
 This directory stores the persistent configuration and memory for the BARE-AI agent.
 
 ## Directory Structure
-- **constitution.md** — Core identity and operational rules
-- **diary/**          — Daily activity logs
-- **logs/**           — JSON telemetry per command execution
-- **bin/**            — Local artifacts (bare-summarize, etc.)
-- **config**          — Agent config (AGENT_ID, ENGINE_TYPE)
+- **technical-constitution.md** — Core Linux tool rules (read-only, managed by bare-ai-agent)
+- **role.md**                  — Agent personality and mission (edit freely, never overwritten)
+- **diary/**                   — Daily activity logs
+- **logs/**                    — JSON telemetry per command execution
+- **bin/**                     — Local artifacts (bare-summarize, etc.)
+- **config**                   — Agent config (AGENT_ID, ENGINE_TYPE)
+
+## Customising Your Agent
+Edit ~/.bare-ai/role.md to define this agent's personality, mission, and domain rules.
+The technical-constitution.md is managed by the repo — do not edit it directly.
 
 ## Engine Selection
 Two engines are supported:
@@ -272,16 +290,21 @@ if ! grep -q "BARE-AI Hybrid Loader" "$BASHRC_FILE"; then
 bare() {
     local MODEL="${1:-granite}"
     local TODAY=$(date +%Y-%m-%d)
-    local CONSTITUTION="$HOME/.bare-ai/constitution.md"
+    local TECH_CONST="$HOME/.bare-ai/technical-constitution.md"
+    local ROLE_CONST="$HOME/.bare-ai/role.md"
     local DIARY="$HOME/.bare-ai/diary/$TODAY.md"
     local CONFIG="$HOME/.bare-ai/config"
 
     mkdir -p "$(dirname "$DIARY")"
     touch "$DIARY"
 
-    if [ ! -f "$CONSTITUTION" ]; then
-        echo -e "\033[0;31mError: Constitution not found at $CONSTITUTION\033[0m"
+    if [ ! -f "$TECH_CONST" ]; then
+        echo -e "\033[0;31mError: Technical constitution not found at $TECH_CONST\033[0m"
+        echo -e "\033[0;31mRe-run setup_bare-ai-worker.sh to restore it.\033[0m"
         return 1
+    fi
+    if [ ! -f "$ROLE_CONST" ]; then
+        echo -e "\033[1;33mWarning: No role constitution at $ROLE_CONST — running with technical only.\033[0m"
     fi
 
     # Load engine type from config
@@ -297,7 +320,8 @@ bare() {
         granite) export VAULT_SECRET_PATH="secret/data/granite/config";         export BARE_AI_NO_TOOLS="false" ;;
     esac
 
-    export BARE_AI_CONSTITUTION="$CONSTITUTION"
+    export BARE_AI_CONSTITUTION="$TECH_CONST"
+    export BARE_AI_ROLE_CONSTITUTION="$ROLE_CONST"
     export BARE_AI_DIARY="$DIARY"
 
     if [ "$ENGINE_TYPE" = "sovereign" ]; then
@@ -312,9 +336,12 @@ bare() {
         fi
     else
         echo -e "\033[1;33m✨ [Engine: Gemini CLI | Model: gemini-2.5-flash-lite]\033[0m"
-        local content
-        content=$(sed "s|{{DATE}}|$TODAY|g" "$CONSTITUTION")
-        gemini -m gemini-2.5-flash-lite -i "$content"
+        local combined_const
+        combined_const=$(sed "s|{{DATE}}|$TODAY|g" "$TECH_CONST")
+        if [ -f "$ROLE_CONST" ]; then
+            combined_const="${combined_const}"$'\n\n---\n\n'"$(sed "s|{{DATE}}|$TODAY|g" "$ROLE_CONST")"
+        fi
+        gemini -m gemini-2.5-flash-lite -i "$combined_const"
         # Log forwarding
         if [ -f "GEMINI.md" ]; then
             echo -e "\n--- SESSION APPENDED: $(date) [gemini] ---" >> "$DIARY"
@@ -326,6 +353,8 @@ bare() {
 }
 
 alias bare-status='echo "🔍 Local Telemetry Audit:"; bare-summarize | jq .'
+alias bare-role='${EDITOR:-nano} ~/.bare-ai/role.md'
+alias bare-constitution='cat ~/.bare-ai/technical-constitution.md'
 BARE_FUNC_EOF
     echo -e "${GREEN}✓ bare() function added to .bashrc${NC}"
 else
@@ -339,5 +368,6 @@ echo -e "${GREEN}═════════════════════
 echo -e "1. ${YELLOW}Reload:${NC}       source ~/.bashrc"
 echo -e "2. ${YELLOW}Test artifact:${NC} bare-summarize"
 echo -e "3. ${YELLOW}Run agent:${NC}    bare granite"
+echo -e "5. ${YELLOW}Edit role:${NC}    bare-role  (customise your agent personality)"
 echo -e "4. ${YELLOW}Engine type:${NC}  $ENGINE_TYPE"
 exit 0
